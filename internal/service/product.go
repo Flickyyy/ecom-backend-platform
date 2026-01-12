@@ -2,10 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/flicky/go-ecommerce-api/internal/dto"
 	"github.com/flicky/go-ecommerce-api/internal/model"
@@ -15,11 +18,12 @@ import (
 var ErrProductNotFound = errors.New("product not found")
 
 type ProductService struct {
-	repo repository.ProductRepository
+	repo  repository.ProductRepository
+	cache *redis.Client
 }
 
-func NewProductService(repo repository.ProductRepository) *ProductService {
-	return &ProductService{repo: repo}
+func NewProductService(repo repository.ProductRepository, cache *redis.Client) *ProductService {
+	return &ProductService{repo: repo, cache: cache}
 }
 
 func (s *ProductService) Create(ctx context.Context, req dto.CreateProductRequest) (*dto.ProductResponse, error) {
@@ -35,6 +39,16 @@ func (s *ProductService) Create(ctx context.Context, req dto.CreateProductReques
 }
 
 func (s *ProductService) GetByID(ctx context.Context, id uuid.UUID) (*dto.ProductResponse, error) {
+	cacheKey := "product:" + id.String()
+	if s.cache != nil {
+		if data, err := s.cache.Get(ctx, cacheKey).Result(); err == nil {
+			var resp dto.ProductResponse
+			if json.Unmarshal([]byte(data), &resp) == nil {
+				return &resp, nil
+			}
+		}
+	}
+
 	product, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get product: %w", err)
@@ -43,6 +57,12 @@ func (s *ProductService) GetByID(ctx context.Context, id uuid.UUID) (*dto.Produc
 		return nil, ErrProductNotFound
 	}
 	resp := toProductResponse(product)
+
+	if s.cache != nil {
+		if data, err := json.Marshal(resp); err == nil {
+			s.cache.Set(ctx, cacheKey, data, time.Minute)
+		}
+	}
 	return &resp, nil
 }
 
@@ -81,7 +101,13 @@ func (s *ProductService) Update(ctx context.Context, id uuid.UUID, req dto.Updat
 }
 
 func (s *ProductService) Delete(ctx context.Context, id uuid.UUID) error {
-	return s.repo.Delete(ctx, id)
+	if err := s.repo.Delete(ctx, id); err != nil {
+		return err
+	}
+	if s.cache != nil {
+		s.cache.Del(ctx, "product:"+id.String())
+	}
+	return nil
 }
 
 func toProductResponse(p *model.Product) dto.ProductResponse {

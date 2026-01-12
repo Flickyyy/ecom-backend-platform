@@ -53,7 +53,7 @@ func (m *mockProductRepo) Delete(_ context.Context, id uuid.UUID) error {
 }
 
 func TestProductService_Create(t *testing.T) {
-	svc := NewProductService(newMockProductRepo())
+	svc := NewProductService(newMockProductRepo(), nil)
 	resp, err := svc.Create(context.Background(), dto.CreateProductRequest{
 		Name: "Test", Price: decimal.NewFromFloat(9.99), Stock: 100,
 	})
@@ -63,7 +63,7 @@ func TestProductService_Create(t *testing.T) {
 }
 
 func TestProductService_GetByID_NotFound(t *testing.T) {
-	svc := NewProductService(newMockProductRepo())
+	svc := NewProductService(newMockProductRepo(), nil)
 	_, err := svc.GetByID(context.Background(), uuid.New())
 	assert.ErrorIs(t, err, ErrProductNotFound)
 }
@@ -72,7 +72,7 @@ func TestProductService_Delete(t *testing.T) {
 	repo := newMockProductRepo()
 	id := uuid.New()
 	repo.products[id] = &model.Product{ID: id}
-	svc := NewProductService(repo)
+	svc := NewProductService(repo, nil)
 	err := svc.Delete(context.Background(), id)
 	require.NoError(t, err)
 	assert.Empty(t, repo.products)

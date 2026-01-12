@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/flicky/go-ecommerce-api/internal/config"
 	"github.com/flicky/go-ecommerce-api/internal/handler"
@@ -44,6 +45,15 @@ func main() {
 	}
 	log.Info("connected to PostgreSQL")
 
+	// Redis
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.Redis.Addr})
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		log.Error("connect to redis", "error", err)
+		os.Exit(1)
+	}
+	defer rdb.Close()
+	log.Info("connected to Redis")
+
 	// Repos
 	userRepo := repository.NewUserRepository(db)
 	productRepo := repository.NewProductRepository(db)
@@ -52,7 +62,7 @@ func main() {
 
 	// Services
 	authSvc := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.Expiration)
-	productSvc := service.NewProductService(productRepo)
+	productSvc := service.NewProductService(productRepo, rdb)
 	cartSvc := service.NewCartService(cartRepo, productRepo)
 	orderSvc := service.NewOrderService(orderRepo, cartRepo, productRepo)
 
@@ -109,6 +119,7 @@ func main() {
 	<-quit
 
 	log.Info("shutting down...")
+
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()
 

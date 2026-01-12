@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Server ServerConfig
 	DB     DBConfig
+	Redis  RedisConfig
 	JWT    JWTConfig
 }
 
@@ -32,6 +33,10 @@ type DBConfig struct {
 func (c DBConfig) DSN() string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		c.User, c.Password, c.Host, c.Port, c.Name, c.SSLMode)
+}
+
+type RedisConfig struct {
+	Addr string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
 }
 
 type JWTConfig struct {
