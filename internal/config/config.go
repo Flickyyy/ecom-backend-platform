@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig
-	DB     DBConfig
-	Redis  RedisConfig
-	JWT    JWTConfig
+	Server   ServerConfig
+	DB       DBConfig
+	Redis    RedisConfig
+	RabbitMQ RabbitMQConfig
+	JWT      JWTConfig
 }
 
 type ServerConfig struct {
@@ -37,6 +38,10 @@ func (c DBConfig) DSN() string {
 
 type RedisConfig struct {
 	Addr string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
+}
+
+type RabbitMQConfig struct {
+	URL string `env:"RABBITMQ_URL" envDefault:"amqp://guest:guest@localhost:5672/"`
 }
 
 type JWTConfig struct {

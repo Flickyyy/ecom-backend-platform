@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/flicky/go-ecommerce-api/internal/config"
@@ -18,6 +19,7 @@ import (
 	"github.com/flicky/go-ecommerce-api/internal/middleware"
 	"github.com/flicky/go-ecommerce-api/internal/repository"
 	"github.com/flicky/go-ecommerce-api/internal/service"
+	"github.com/flicky/go-ecommerce-api/internal/worker"
 )
 
 func main() {
@@ -54,6 +56,27 @@ func main() {
 	defer rdb.Close()
 	log.Info("connected to Redis")
 
+	// RabbitMQ
+	amqpConn, err := amqp.Dial(cfg.RabbitMQ.URL)
+	if err != nil {
+		log.Error("connect to rabbitmq", "error", err)
+		os.Exit(1)
+	}
+	defer amqpConn.Close()
+
+	amqpCh, err := amqpConn.Channel()
+	if err != nil {
+		log.Error("open rabbitmq channel", "error", err)
+		os.Exit(1)
+	}
+	defer amqpCh.Close()
+	log.Info("connected to RabbitMQ")
+
+	if err := worker.SetupQueues(amqpCh); err != nil {
+		log.Error("setup queues", "error", err)
+		os.Exit(1)
+	}
+
 	// Repos
 	userRepo := repository.NewUserRepository(db)
 	productRepo := repository.NewProductRepository(db)
@@ -64,7 +87,14 @@ func main() {
 	authSvc := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.Expiration)
 	productSvc := service.NewProductService(productRepo, rdb)
 	cartSvc := service.NewCartService(cartRepo, productRepo)
-	orderSvc := service.NewOrderService(orderRepo, cartRepo, productRepo)
+	orderSvc := service.NewOrderService(orderRepo, cartRepo, productRepo, amqpCh)
+
+	// Worker
+	orderWorker := worker.NewOrderWorker(amqpCh, orderRepo, rdb, log)
+	if err := orderWorker.Start(ctx); err != nil {
+		log.Error("start order worker", "error", err)
+		os.Exit(1)
+	}
 
 	// Handlers
 	authH := handler.NewAuthHandler(authSvc)
@@ -76,6 +106,17 @@ func main() {
 	r := gin.Default()
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
+	})
+	r.GET("/readyz", func(c *gin.Context) {
+		if err := db.Ping(c.Request.Context()); err != nil {
+			c.JSON(503, gin.H{"status": "not ready", "error": "postgres"})
+			return
+		}
+		if err := rdb.Ping(c.Request.Context()).Err(); err != nil {
+			c.JSON(503, gin.H{"status": "not ready", "error": "redis"})
+			return
+		}
+		c.JSON(200, gin.H{"status": "ready"})
 	})
 
 	v1 := r.Group("/api/v1")
@@ -119,6 +160,7 @@ func main() {
 	<-quit
 
 	log.Info("shutting down...")
+	orderWorker.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()

@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/shopspring/decimal"
 
 	"github.com/flicky/go-ecommerce-api/internal/model"
@@ -22,10 +24,11 @@ type OrderService struct {
 	orderRepo   repository.OrderRepository
 	cartRepo    repository.CartRepository
 	productRepo repository.ProductRepository
+	amqpCh      *amqp.Channel
 }
 
-func NewOrderService(orderRepo repository.OrderRepository, cartRepo repository.CartRepository, productRepo repository.ProductRepository) *OrderService {
-	return &OrderService{orderRepo: orderRepo, cartRepo: cartRepo, productRepo: productRepo}
+func NewOrderService(orderRepo repository.OrderRepository, cartRepo repository.CartRepository, productRepo repository.ProductRepository, amqpCh *amqp.Channel) *OrderService {
+	return &OrderService{orderRepo: orderRepo, cartRepo: cartRepo, productRepo: productRepo, amqpCh: amqpCh}
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID) (*model.Order, error) {
@@ -54,9 +57,19 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID) (*mode
 		})
 	}
 
-	order := &model.Order{UserID: userID, Status: "completed", TotalPrice: total, Items: items}
-	if err := s.orderRepo.CreateWithItems(ctx, order, items); err != nil {
+	order := &model.Order{UserID: userID, Status: "pending", TotalPrice: total, Items: items}
+	if err := s.orderRepo.Create(ctx, order); err != nil {
 		return nil, fmt.Errorf("create order: %w", err)
+	}
+
+	// Publish to RabbitMQ for async processing
+	msg, _ := json.Marshal(model.OrderMessage{OrderID: order.ID, UserID: userID})
+	if s.amqpCh != nil {
+		_ = s.amqpCh.PublishWithContext(ctx, "", "orders", false, false, amqp.Publishing{
+			ContentType:  "application/json",
+			Body:         msg,
+			DeliveryMode: amqp.Persistent,
+		})
 	}
 
 	_ = s.cartRepo.ClearCart(ctx, cart.ID)

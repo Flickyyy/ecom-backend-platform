@@ -57,3 +57,8 @@ type OrderItem struct {
 	Quantity  int
 	Price     decimal.Decimal
 }
+
+type OrderMessage struct {
+	OrderID uuid.UUID `json:"order_id"`
+	UserID  uuid.UUID `json:"user_id"`
+}
