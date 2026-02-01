@@ -44,7 +44,7 @@ func (r *pgOrderRepo) ProcessOrder(ctx context.Context, orderID uuid.UUID, items
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is no-op
 
 	for i := range items {
 		items[i].ID = uuid.New()
@@ -114,6 +114,9 @@ func (r *pgOrderRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Order, 
 		item.OrderID = order.ID
 		order.Items = append(order.Items, item)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate order items: %w", err)
+	}
 	return order, nil
 }
 
@@ -135,6 +138,9 @@ func (r *pgOrderRepo) ListByUserID(ctx context.Context, userID uuid.UUID) ([]mod
 			return nil, fmt.Errorf("scan order: %w", err)
 		}
 		orders = append(orders, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate orders: %w", err)
 	}
 	return orders, nil
 }

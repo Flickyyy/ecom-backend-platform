@@ -73,6 +73,9 @@ func (r *pgCartRepo) GetCartWithItems(ctx context.Context, cartID uuid.UUID) (*m
 		item.CartID = cartID
 		cart.Items = append(cart.Items, item)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate cart items: %w", err)
+	}
 	return cart, nil
 }
 

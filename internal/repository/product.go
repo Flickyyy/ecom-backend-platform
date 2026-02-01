@@ -76,6 +76,9 @@ func (r *pgProductRepo) List(ctx context.Context, limit, offset int) ([]model.Pr
 		}
 		products = append(products, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate products: %w", err)
+	}
 	return products, total, nil
 }
 

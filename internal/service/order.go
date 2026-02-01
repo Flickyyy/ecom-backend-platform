@@ -62,14 +62,19 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID) (*mode
 		return nil, fmt.Errorf("create order: %w", err)
 	}
 
-	// Publish to RabbitMQ for async processing
-	msg, _ := json.Marshal(model.OrderMessage{OrderID: order.ID, UserID: userID})
+	msg, err := json.Marshal(model.OrderMessage{OrderID: order.ID, UserID: userID})
+	if err != nil {
+		return nil, fmt.Errorf("marshal order message: %w", err)
+	}
+
 	if s.amqpCh != nil {
-		_ = s.amqpCh.PublishWithContext(ctx, "", "orders", false, false, amqp.Publishing{
+		if err := s.amqpCh.PublishWithContext(ctx, "", "orders", false, false, amqp.Publishing{
 			ContentType:  "application/json",
 			Body:         msg,
 			DeliveryMode: amqp.Persistent,
-		})
+		}); err != nil {
+			return nil, fmt.Errorf("publish order: %w", err)
+		}
 	}
 
 	_ = s.cartRepo.ClearCart(ctx, cart.ID)

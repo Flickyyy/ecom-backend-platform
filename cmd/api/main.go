@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -53,7 +54,7 @@ func main() {
 		log.Error("connect to redis", "error", err)
 		os.Exit(1)
 	}
-	defer rdb.Close()
+	defer rdb.Close() //nolint:errcheck // best-effort cleanup
 	log.Info("connected to Redis")
 
 	// RabbitMQ
@@ -62,14 +63,14 @@ func main() {
 		log.Error("connect to rabbitmq", "error", err)
 		os.Exit(1)
 	}
-	defer amqpConn.Close()
+	defer amqpConn.Close() //nolint:errcheck // best-effort cleanup
 
 	amqpCh, err := amqpConn.Channel()
 	if err != nil {
 		log.Error("open rabbitmq channel", "error", err)
 		os.Exit(1)
 	}
-	defer amqpCh.Close()
+	defer amqpCh.Close() //nolint:errcheck // best-effort cleanup
 	log.Info("connected to RabbitMQ")
 
 	if err := worker.SetupQueues(amqpCh); err != nil {
@@ -149,7 +150,7 @@ func main() {
 
 	go func() {
 		log.Info("starting server", "port", cfg.Server.Port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server error", "error", err)
 			os.Exit(1)
 		}

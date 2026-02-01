@@ -75,7 +75,7 @@ func (w *OrderWorker) handle(ctx context.Context, msg amqp.Delivery) {
 	var m model.OrderMessage
 	if err := json.Unmarshal(msg.Body, &m); err != nil {
 		w.log.Error("unmarshal", "error", err)
-		msg.Nack(false, false)
+		_ = msg.Nack(false, false)
 		return
 	}
 
@@ -83,25 +83,25 @@ func (w *OrderWorker) handle(ctx context.Context, msg amqp.Delivery) {
 	key := "order_processed:" + m.OrderID.String()
 	if n, _ := w.redis.Exists(ctx, key).Result(); n > 0 {
 		w.log.Info("already processed", "order_id", m.OrderID)
-		msg.Ack(false)
+		_ = msg.Ack(false)
 		return
 	}
 
 	order, err := w.orderRepo.GetByID(ctx, m.OrderID)
 	if err != nil || order == nil {
 		w.log.Error("get order", "error", err)
-		msg.Nack(false, false)
+		_ = msg.Nack(false, false)
 		return
 	}
 
 	if err := w.orderRepo.ProcessOrder(ctx, m.OrderID, order.Items); err != nil {
 		w.log.Error("process order", "error", err, "order_id", m.OrderID)
 		_ = w.orderRepo.UpdateStatus(ctx, m.OrderID, "failed")
-		msg.Nack(false, false) // → DLQ
+		_ = msg.Nack(false, false) // → DLQ
 		return
 	}
 
-	w.redis.Set(ctx, key, "1", 24*time.Hour)
-	msg.Ack(false)
+	_ = w.redis.Set(ctx, key, "1", 24*time.Hour).Err()
+	_ = msg.Ack(false)
 	w.log.Info("order processed", "order_id", m.OrderID)
 }

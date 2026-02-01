@@ -60,7 +60,7 @@ func (s *ProductService) GetByID(ctx context.Context, id uuid.UUID) (*dto.Produc
 
 	if s.cache != nil {
 		if data, err := json.Marshal(resp); err == nil {
-			s.cache.Set(ctx, cacheKey, data, time.Minute)
+			_ = s.cache.Set(ctx, cacheKey, data, time.Minute).Err()
 		}
 	}
 	return &resp, nil
@@ -105,7 +105,7 @@ func (s *ProductService) Delete(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 	if s.cache != nil {
-		s.cache.Del(ctx, "product:"+id.String())
+		_ = s.cache.Del(ctx, "product:"+id.String()).Err()
 	}
 	return nil
 }
