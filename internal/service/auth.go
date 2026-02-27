@@ -32,7 +32,7 @@ func NewAuthService(userRepo repository.UserRepository, jwtSecret string, jwtExp
 func (s *AuthService) Register(ctx context.Context, req dto.RegisterRequest) (*dto.AuthResponse, error) {
 	existing, err := s.userRepo.GetByEmail(ctx, req.Email)
 	if err != nil {
-		return nil, fmt.Errorf("check existing user: %w", err)
+		return nil, fmt.Errorf("check user: %w", err)
 	}
 	if existing != nil {
 		return nil, ErrUserAlreadyExists
@@ -44,11 +44,8 @@ func (s *AuthService) Register(ctx context.Context, req dto.RegisterRequest) (*d
 	}
 
 	user := &model.User{
-		Email:     req.Email,
-		Password:  string(hashed),
-		FirstName: req.FirstName,
-		LastName:  req.LastName,
-		Role:      "customer",
+		Email: req.Email, Password: string(hashed),
+		FirstName: req.FirstName, LastName: req.LastName, Role: "customer",
 	}
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
@@ -58,7 +55,6 @@ func (s *AuthService) Register(ctx context.Context, req dto.RegisterRequest) (*d
 	if err != nil {
 		return nil, fmt.Errorf("generate token: %w", err)
 	}
-
 	return &dto.AuthResponse{Token: token, User: toUserResponse(user)}, nil
 }
 
@@ -70,7 +66,6 @@ func (s *AuthService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Aut
 	if user == nil {
 		return nil, ErrInvalidCredentials
 	}
-
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		return nil, ErrInvalidCredentials
 	}
@@ -79,7 +74,6 @@ func (s *AuthService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Aut
 	if err != nil {
 		return nil, fmt.Errorf("generate token: %w", err)
 	}
-
 	return &dto.AuthResponse{Token: token, User: toUserResponse(user)}, nil
 }
 
@@ -95,10 +89,7 @@ func (s *AuthService) generateToken(user *model.User) (string, error) {
 
 func toUserResponse(user *model.User) dto.UserResponse {
 	return dto.UserResponse{
-		ID:        user.ID,
-		Email:     user.Email,
-		FirstName: user.FirstName,
-		LastName:  user.LastName,
-		Role:      user.Role,
+		ID: user.ID, Email: user.Email,
+		FirstName: user.FirstName, LastName: user.LastName, Role: user.Role,
 	}
 }

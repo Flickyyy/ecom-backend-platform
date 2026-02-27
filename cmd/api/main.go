@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,152 +34,134 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// PostgreSQL
-	poolCfg, err := pgxpool.ParseConfig(cfg.DB.DSN())
-	if err != nil {
-		log.Error("parse db config", "error", err)
-		os.Exit(1)
-	}
-	poolCfg.MaxConns = cfg.DB.MaxConns
-
-	dbPool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	db, err := pgxpool.New(ctx, cfg.DB.DSN())
 	if err != nil {
 		log.Error("connect to database", "error", err)
 		os.Exit(1)
 	}
-	defer dbPool.Close()
+	defer db.Close()
 
-	if err := dbPool.Ping(ctx); err != nil {
+	if err := db.Ping(ctx); err != nil {
 		log.Error("ping database", "error", err)
 		os.Exit(1)
 	}
 	log.Info("connected to PostgreSQL")
 
 	// Redis
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
-	})
-	defer redisClient.Close()
-
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		log.Error("connect to Redis", "error", err)
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.Redis.Addr})
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		log.Error("connect to redis", "error", err)
 		os.Exit(1)
 	}
+	defer rdb.Close()
 	log.Info("connected to Redis")
 
 	// RabbitMQ
 	amqpConn, err := amqp.Dial(cfg.RabbitMQ.URL)
 	if err != nil {
-		log.Error("connect to RabbitMQ", "error", err)
+		log.Error("connect to rabbitmq", "error", err)
 		os.Exit(1)
 	}
 	defer amqpConn.Close()
 
 	amqpCh, err := amqpConn.Channel()
 	if err != nil {
-		log.Error("open RabbitMQ channel", "error", err)
+		log.Error("open rabbitmq channel", "error", err)
 		os.Exit(1)
 	}
 	defer amqpCh.Close()
-
-	if err := worker.SetupRabbitMQ(amqpCh); err != nil {
-		log.Error("setup RabbitMQ", "error", err)
-		os.Exit(1)
-	}
 	log.Info("connected to RabbitMQ")
 
-	// Repositories
-	userRepo := repository.NewUserRepository(dbPool)
-	productRepo := repository.NewProductRepository(dbPool)
-	cartRepo := repository.NewCartRepository(dbPool)
-	orderRepo := repository.NewOrderRepository(dbPool)
+	if err := worker.SetupQueues(amqpCh); err != nil {
+		log.Error("setup queues", "error", err)
+		os.Exit(1)
+	}
+
+	// Repos
+	userRepo := repository.NewUserRepository(db)
+	productRepo := repository.NewProductRepository(db)
+	cartRepo := repository.NewCartRepository(db)
+	orderRepo := repository.NewOrderRepository(db)
 
 	// Services
 	authSvc := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.Expiration)
-	productSvc := service.NewProductService(productRepo, redisClient)
+	productSvc := service.NewProductService(productRepo, rdb)
 	cartSvc := service.NewCartService(cartRepo, productRepo)
 	orderSvc := service.NewOrderService(orderRepo, cartRepo, productRepo, amqpCh)
+
+	// Worker
+	orderWorker := worker.NewOrderWorker(amqpCh, orderRepo, rdb, log)
+	orderWorker.Start(ctx)
 
 	// Handlers
 	authH := handler.NewAuthHandler(authSvc)
 	productH := handler.NewProductHandler(productSvc)
-	cartH := handler.NewCartHandler(cartSvc, productSvc)
+	cartH := handler.NewCartHandler(cartSvc)
 	orderH := handler.NewOrderHandler(orderSvc)
-	healthH := handler.NewHealthHandler(dbPool, redisClient, amqpConn)
-
-	// Worker
-	orderWorker := worker.NewOrderWorker(amqpCh, orderRepo, productRepo, redisClient, log)
 
 	// Router
-	router := gin.Default()
-	router.GET("/healthz", healthH.Healthz)
-	router.GET("/readyz", healthH.Readyz)
+	r := gin.Default()
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+	r.GET("/readyz", func(c *gin.Context) {
+		if err := db.Ping(c.Request.Context()); err != nil {
+			c.JSON(503, gin.H{"status": "not ready", "error": "postgres"})
+			return
+		}
+		if err := rdb.Ping(c.Request.Context()).Err(); err != nil {
+			c.JSON(503, gin.H{"status": "not ready", "error": "redis"})
+			return
+		}
+		c.JSON(200, gin.H{"status": "ready"})
+	})
 
-	v1 := router.Group("/api/v1")
-	{
-		auth := v1.Group("/auth")
-		auth.POST("/register", authH.Register)
-		auth.POST("/login", authH.Login)
+	v1 := r.Group("/api/v1")
+	v1.POST("/auth/register", authH.Register)
+	v1.POST("/auth/login", authH.Login)
 
-		products := v1.Group("/products")
-		products.GET("", productH.List)
-		products.GET("/:id", productH.GetByID)
+	v1.GET("/products", productH.List)
+	v1.GET("/products/:id", productH.GetByID)
 
-		admin := products.Group("", middleware.AuthMiddleware(cfg.JWT.Secret), middleware.AdminOnly())
-		admin.POST("", productH.Create)
-		admin.PUT("/:id", productH.Update)
-		admin.DELETE("/:id", productH.Delete)
+	admin := v1.Group("", middleware.AuthMiddleware(cfg.JWT.Secret), middleware.AdminOnly())
+	admin.POST("/products", productH.Create)
+	admin.PUT("/products/:id", productH.Update)
+	admin.DELETE("/products/:id", productH.Delete)
 
-		cart := v1.Group("/cart", middleware.AuthMiddleware(cfg.JWT.Secret))
-		cart.GET("", cartH.GetCart)
-		cart.POST("/items", cartH.AddItem)
-		cart.PUT("/items/:id", cartH.UpdateItem)
-		cart.DELETE("/items/:id", cartH.DeleteItem)
-
-		orders := v1.Group("/orders", middleware.AuthMiddleware(cfg.JWT.Secret))
-		orders.POST("", orderH.CreateOrder)
-		orders.GET("", orderH.ListOrders)
-		orders.GET("/:id", orderH.GetOrder)
-	}
-
-	if err := orderWorker.Start(ctx); err != nil {
-		log.Error("start order worker", "error", err)
-		os.Exit(1)
-	}
+	auth := v1.Group("", middleware.AuthMiddleware(cfg.JWT.Secret))
+	auth.GET("/cart", cartH.GetCart)
+	auth.POST("/cart/items", cartH.AddItem)
+	auth.PUT("/cart/items/:id", cartH.UpdateItem)
+	auth.DELETE("/cart/items/:id", cartH.DeleteItem)
+	auth.POST("/orders", orderH.CreateOrder)
+	auth.GET("/orders", orderH.ListOrders)
+	auth.GET("/orders/:id", orderH.GetOrder)
 
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:      router,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
+		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler: r,
 	}
 
 	go func() {
-		log.Info("starting HTTP server", "port", cfg.Server.Port)
+		log.Info("starting server", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "error", err)
 			os.Exit(1)
 		}
 	}()
 
-	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	log.Info("shutting down...")
+	orderWorker.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Error("server shutdown", "error", err)
+		log.Error("shutdown error", "error", err)
 	}
-
-	orderWorker.Stop()
-	time.Sleep(500 * time.Millisecond)
-	cancel()
 	log.Info("server stopped")
 }

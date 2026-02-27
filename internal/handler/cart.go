@@ -13,51 +13,35 @@ import (
 )
 
 type CartHandler struct {
-	cartService    *service.CartService
-	productService *service.ProductService
+	svc *service.CartService
 }
 
-func NewCartHandler(cartService *service.CartService, productService *service.ProductService) *CartHandler {
-	return &CartHandler{cartService: cartService, productService: productService}
+func NewCartHandler(svc *service.CartService) *CartHandler {
+	return &CartHandler{svc: svc}
 }
 
 func (h *CartHandler) GetCart(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-
-	cart, err := h.cartService.GetCart(c.Request.Context(), userID)
+	cart, err := h.svc.GetCart(c.Request.Context(), middleware.GetUserID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
-	resp := dto.CartResponse{ID: cart.ID, Items: make([]dto.CartItemResponse, 0)}
+	items := make([]dto.CartItemResponse, 0, len(cart.Items))
 	for _, item := range cart.Items {
-		product, err := h.productService.GetByID(c.Request.Context(), item.ProductID)
-		if err != nil {
-			continue
-		}
-		resp.Items = append(resp.Items, dto.CartItemResponse{
-			ID:        item.ID,
-			ProductID: item.ProductID,
-			Name:      product.Name,
-			Price:     product.Price,
-			Quantity:  item.Quantity,
+		items = append(items, dto.CartItemResponse{
+			ID: item.ID, ProductID: item.ProductID, Quantity: item.Quantity,
 		})
 	}
-
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, dto.CartResponse{ID: cart.ID, Items: items})
 }
 
 func (h *CartHandler) AddItem(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-
 	var req dto.AddCartItemRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	if err := h.cartService.AddItem(c.Request.Context(), userID, req.ProductID, req.Quantity); err != nil {
+	if err := h.svc.AddItem(c.Request.Context(), middleware.GetUserID(c), req.ProductID, req.Quantity); err != nil {
 		if errors.Is(err, service.ErrProductNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
 			return
@@ -65,54 +49,36 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
-	c.JSON(http.StatusCreated, gin.H{"message": "item added to cart"})
+	c.JSON(http.StatusCreated, gin.H{"message": "item added"})
 }
 
 func (h *CartHandler) UpdateItem(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-
 	itemID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid item ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-
 	var req dto.UpdateCartItemRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	if err := h.cartService.UpdateItem(c.Request.Context(), userID, itemID, req.Quantity); err != nil {
-		if errors.Is(err, service.ErrCartItemNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "cart item not found"})
-			return
-		}
+	if err := h.svc.UpdateItem(c.Request.Context(), middleware.GetUserID(c), itemID, req.Quantity); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "cart item updated"})
+	c.JSON(http.StatusOK, gin.H{"message": "item updated"})
 }
 
 func (h *CartHandler) DeleteItem(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-
 	itemID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid item ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-
-	if err := h.cartService.DeleteItem(c.Request.Context(), userID, itemID); err != nil {
-		if errors.Is(err, service.ErrWrongCart) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "cart item not found"})
-			return
-		}
+	if err := h.svc.DeleteItem(c.Request.Context(), middleware.GetUserID(c), itemID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
 	c.Status(http.StatusNoContent)
 }

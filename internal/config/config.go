@@ -29,20 +29,15 @@ type DBConfig struct {
 	Password string `env:"DB_PASSWORD" envDefault:"postgres"`
 	Name     string `env:"DB_NAME" envDefault:"ecommerce"`
 	SSLMode  string `env:"DB_SSLMODE" envDefault:"disable"`
-	MaxConns int32  `env:"DB_MAX_CONNS" envDefault:"10"`
 }
 
 func (c DBConfig) DSN() string {
-	return fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		c.User, c.Password, c.Host, c.Port, c.Name, c.SSLMode,
-	)
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		c.User, c.Password, c.Host, c.Port, c.Name, c.SSLMode)
 }
 
 type RedisConfig struct {
-	Addr     string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
-	Password string `env:"REDIS_PASSWORD" envDefault:""`
-	DB       int    `env:"REDIS_DB" envDefault:"0"`
+	Addr string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
 }
 
 type RabbitMQConfig struct {

@@ -11,11 +11,11 @@ import (
 )
 
 type AuthHandler struct {
-	authService *service.AuthService
+	svc *service.AuthService
 }
 
-func NewAuthHandler(authService *service.AuthService) *AuthHandler {
-	return &AuthHandler{authService: authService}
+func NewAuthHandler(svc *service.AuthService) *AuthHandler {
+	return &AuthHandler{svc: svc}
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -24,8 +24,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	resp, err := h.authService.Register(c.Request.Context(), req)
+	resp, err := h.svc.Register(c.Request.Context(), req)
 	if err != nil {
 		if errors.Is(err, service.ErrUserAlreadyExists) {
 			c.JSON(http.StatusConflict, gin.H{"error": "user already exists"})
@@ -34,7 +33,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
 	c.JSON(http.StatusCreated, resp)
 }
 
@@ -44,8 +42,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	resp, err := h.authService.Login(c.Request.Context(), req)
+	resp, err := h.svc.Login(c.Request.Context(), req)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidCredentials) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
@@ -54,6 +51,5 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
 	c.JSON(http.StatusOK, resp)
 }

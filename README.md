@@ -1,103 +1,72 @@
 # Go E-commerce API
 
-Backend-платформа интернет-магазина. REST API для управления товарами, корзиной, заказами и пользователями.
+Backend интернет-магазина на Go. REST API для товаров, корзины, заказов и авторизации.  
+Асинхронная обработка заказов через RabbitMQ с Dead Letter Queue и идемпотентностью.
 
-## Стек технологий
+## Стек
 
-- **Go 1.22** — основной язык
-- **Gin** — HTTP-роутер
-- **PostgreSQL 16** — основное хранилище (pgx/v5)
-- **Redis 7** — кэширование каталога и ключи идемпотентности
-- **RabbitMQ 3.13** — асинхронная обработка заказов (DLQ)
-- **JWT** — аутентификация (golang-jwt)
-- **slog** — структурированное логирование (stdlib)
-- **Docker & Docker Compose** — контейнеризация
-- **GitHub Actions** — CI/CD
+- **Go 1.22**, Gin
+- **PostgreSQL 16** (pgx/v5) — транзакции, индексы, миграции
+- **RabbitMQ** — async order processing, manual ack, DLQ
+- **Redis** — кэширование продуктов, идемпотентность
+- **JWT** авторизация (customer / admin)
+- **slog** — структурированное логирование (JSON)
+- **Docker & Docker Compose**
+- **GitHub Actions** CI (lint, test, build)
 
-## Архитектура
-
-Clean Architecture с разделением на слои:
+## Структура
 
 ```
-cmd/api/main.go              → точка входа, graceful shutdown
+cmd/api/main.go                → точка входа, graceful shutdown
 internal/
-  config/config.go           → конфиг из env (caarlos0/env)
-  model/model.go             → доменные модели
-  dto/dto.go                 → request/response DTO
-  repository/                → работа с БД (PostgreSQL)
-  service/                   → бизнес-логика
-  handler/                   → HTTP-хендлеры
-  middleware/auth.go         → JWT middleware
-  worker/order_worker.go     → RabbitMQ consumer
+  config/config.go             → конфиг из env
+  model/model.go               → доменные модели
+  dto/dto.go                   → request/response DTO
+  repository/                  → слой данных (PostgreSQL)
+  service/                     → бизнес-логика
+  handler/                     → HTTP-хендлеры
+  middleware/auth.go           → JWT middleware
+  worker/order_worker.go       → RabbitMQ consumer (DLQ, idempotency)
+migrations/                    → SQL миграции
 ```
 
-## Быстрый старт
+## Запуск
 
 ```bash
 docker-compose up --build
 ```
 
-API доступен на `http://localhost:8080`.
+API: `http://localhost:8080`
 
-## API Endpoints
+## Endpoints
 
-### Auth
 | Метод | Путь | Описание |
 |---|---|---|
 | POST | `/api/v1/auth/register` | Регистрация |
 | POST | `/api/v1/auth/login` | Логин → JWT |
-
-### Products
-| Метод | Путь | Описание |
-|---|---|---|
-| GET | `/api/v1/products` | Список товаров (пагинация, поиск) |
-| GET | `/api/v1/products/:id` | Один товар (кэш Redis) |
-| POST | `/api/v1/products` | Создать товар (admin) |
-| PUT | `/api/v1/products/:id` | Обновить товар (admin) |
-| DELETE | `/api/v1/products/:id` | Удалить товар (admin) |
-
-### Cart
-| Метод | Путь | Описание |
-|---|---|---|
-| GET | `/api/v1/cart` | Получить корзину |
-| POST | `/api/v1/cart/items` | Добавить товар |
+| GET | `/api/v1/products` | Список товаров |
+| GET | `/api/v1/products/:id` | Товар по ID |
+| POST | `/api/v1/products` | Создать (admin) |
+| PUT | `/api/v1/products/:id` | Обновить (admin) |
+| DELETE | `/api/v1/products/:id` | Удалить (admin) |
+| GET | `/api/v1/cart` | Корзина |
+| POST | `/api/v1/cart/items` | Добавить в корзину |
 | PUT | `/api/v1/cart/items/:id` | Изменить количество |
 | DELETE | `/api/v1/cart/items/:id` | Удалить из корзины |
-
-### Orders
-| Метод | Путь | Описание |
-|---|---|---|
-| POST | `/api/v1/orders` | Создать заказ из корзины |
+| POST | `/api/v1/orders` | Создать заказ |
 | GET | `/api/v1/orders` | Список заказов |
 | GET | `/api/v1/orders/:id` | Детали заказа |
-
-### Service
-| Метод | Путь | Описание |
-|---|---|---|
 | GET | `/healthz` | Health check |
-| GET | `/readyz` | Readiness check (PG + Redis + RMQ) |
+| GET | `/readyz` | Readiness (PG + Redis) |
 
-## Обработка заказов
-
-1. `POST /api/v1/orders` → статус `created`, сообщение в RabbitMQ
-2. **Order Worker** потребляет сообщение:
-   - Проверяет idempotency key в Redis
-   - Транзакция: списание stock, обновление статуса → `completed`
-   - При ошибке → `nack` → Dead Letter Queue
-3. Idempotency key хранится 24h в Redis
-
-## Тестирование
+## Тесты
 
 ```bash
-# Unit-тесты
-go test ./internal/service/... -v
+# unit-тесты
+go test -v ./internal/service/...
 
-# Интеграционные тесты (нужен PostgreSQL)
-TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/ecommerce_test?sslmode=disable" \
-  go test ./internal/repository/... -v
-
-# Все тесты
-go test -race ./...
+# интеграционные тесты (требуется PostgreSQL)
+go test -v -tags integration ./internal/repository/...
 ```
 
 ## Переменные окружения
@@ -110,11 +79,7 @@ go test -race ./...
 | `DB_USER` | `postgres` | Пользователь |
 | `DB_PASSWORD` | `postgres` | Пароль |
 | `DB_NAME` | `ecommerce` | Имя БД |
-| `REDIS_ADDR` | `localhost:6379` | Адрес Redis |
-| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672/` | URL RabbitMQ |
 | `JWT_SECRET` | `super-secret-key` | JWT секрет |
 | `JWT_EXPIRATION` | `24h` | Время жизни токена |
-
-## Лицензия
-
-MIT
+| `REDIS_ADDR` | `localhost:6379` | Адрес Redis |
+| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672/` | URL RabbitMQ |

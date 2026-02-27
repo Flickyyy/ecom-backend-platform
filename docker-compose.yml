@@ -6,17 +6,14 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - SERVER_PORT=8080
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_USER=postgres
       - DB_PASSWORD=postgres
       - DB_NAME=ecommerce
-      - DB_SSLMODE=disable
+      - JWT_SECRET=super-secret-key
       - REDIS_ADDR=redis:6379
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-      - JWT_SECRET=super-secret-key-change-me
-      - JWT_EXPIRATION=24h
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,7 +32,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ecommerce
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
       - ./migrations/001_init.up.sql:/docker-entrypoint-initdb.d/001_init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -47,8 +44,6 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -56,22 +51,15 @@ services:
       retries: 5
 
   rabbitmq:
-    image: rabbitmq:3.13-management-alpine
+    image: rabbitmq:3-management-alpine
     ports:
       - "5672:5672"
       - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
       interval: 10s
       timeout: 10s
       retries: 5
 
 volumes:
-  postgres_data:
-  redis_data:
-  rabbitmq_data:
+  pgdata:

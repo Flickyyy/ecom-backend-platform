@@ -14,17 +14,15 @@ import (
 )
 
 type OrderHandler struct {
-	orderService *service.OrderService
+	svc *service.OrderService
 }
 
-func NewOrderHandler(orderService *service.OrderService) *OrderHandler {
-	return &OrderHandler{orderService: orderService}
+func NewOrderHandler(svc *service.OrderService) *OrderHandler {
+	return &OrderHandler{svc: svc}
 }
 
 func (h *OrderHandler) CreateOrder(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-
-	order, err := h.orderService.CreateOrder(c.Request.Context(), userID)
+	order, err := h.svc.CreateOrder(c.Request.Context(), middleware.GetUserID(c))
 	if err != nil {
 		if errors.Is(err, service.ErrEmptyCart) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "cart is empty"})
@@ -33,37 +31,29 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
 	c.JSON(http.StatusCreated, toOrderResponse(order))
 }
 
 func (h *OrderHandler) ListOrders(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-
-	orders, err := h.orderService.ListByUserID(c.Request.Context(), userID)
+	orders, err := h.svc.ListByUserID(c.Request.Context(), middleware.GetUserID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
-	var items []dto.OrderResponse
-	for _, o := range orders {
-		items = append(items, toOrderResponse(&o))
+	resp := make([]dto.OrderResponse, len(orders))
+	for i := range orders {
+		resp[i] = toOrderResponse(&orders[i])
 	}
-
-	c.JSON(http.StatusOK, dto.OrderListResponse{Orders: items, Total: len(items)})
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *OrderHandler) GetOrder(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-
 	orderID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid order ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-
-	order, err := h.orderService.GetByID(c.Request.Context(), orderID, userID)
+	order, err := h.svc.GetByID(c.Request.Context(), orderID, middleware.GetUserID(c))
 	if err != nil {
 		if errors.Is(err, service.ErrOrderNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
@@ -76,27 +66,18 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
-
 	c.JSON(http.StatusOK, toOrderResponse(order))
 }
 
-func toOrderResponse(order *model.Order) dto.OrderResponse {
-	var items []dto.OrderItemResponse
-	for _, item := range order.Items {
-		items = append(items, dto.OrderItemResponse{
-			ID:        item.ID,
-			ProductID: item.ProductID,
-			Quantity:  item.Quantity,
-			Price:     item.Price,
-		})
+func toOrderResponse(o *model.Order) dto.OrderResponse {
+	items := make([]dto.OrderItemResponse, len(o.Items))
+	for i, item := range o.Items {
+		items[i] = dto.OrderItemResponse{
+			ProductID: item.ProductID, Quantity: item.Quantity, Price: item.Price,
+		}
 	}
 	return dto.OrderResponse{
-		ID:         order.ID,
-		UserID:     order.UserID,
-		Status:     order.Status,
-		TotalPrice: order.TotalPrice,
-		Items:      items,
-		CreatedAt:  order.CreatedAt,
-		UpdatedAt:  order.UpdatedAt,
+		ID: o.ID, Status: o.Status, TotalPrice: o.TotalPrice,
+		Items: items, CreatedAt: o.CreatedAt,
 	}
 }

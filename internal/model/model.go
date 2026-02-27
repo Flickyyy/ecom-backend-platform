@@ -8,69 +8,54 @@ import (
 )
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	Email     string    `json:"email"`
-	Password  string    `json:"-"`
-	FirstName string    `json:"first_name"`
-	LastName  string    `json:"last_name"`
-	Role      string    `json:"role"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        uuid.UUID
+	Email     string
+	Password  string
+	FirstName string
+	LastName  string
+	Role      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Product struct {
-	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Price       decimal.Decimal `json:"price"`
-	Stock       int             `json:"stock"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID          uuid.UUID
+	Name        string
+	Description string
+	Price       decimal.Decimal
+	Stock       int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type Cart struct {
-	ID        uuid.UUID  `json:"id"`
-	UserID    uuid.UUID  `json:"user_id"`
-	Items     []CartItem `json:"items"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID     uuid.UUID
+	UserID uuid.UUID
+	Items  []CartItem
 }
 
 type CartItem struct {
-	ID        uuid.UUID `json:"id"`
-	CartID    uuid.UUID `json:"cart_id"`
-	ProductID uuid.UUID `json:"product_id"`
-	Quantity  int       `json:"quantity"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        uuid.UUID
+	CartID    uuid.UUID
+	ProductID uuid.UUID
+	Quantity  int
 }
 
-type OrderStatus string
-
-const (
-	OrderStatusCreated    OrderStatus = "created"
-	OrderStatusProcessing OrderStatus = "processing"
-	OrderStatusCompleted  OrderStatus = "completed"
-	OrderStatusFailed     OrderStatus = "failed"
-)
-
 type Order struct {
-	ID         uuid.UUID       `json:"id"`
-	UserID     uuid.UUID       `json:"user_id"`
-	Status     OrderStatus     `json:"status"`
-	TotalPrice decimal.Decimal `json:"total_price"`
-	Items      []OrderItem     `json:"items"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	Status     string
+	TotalPrice decimal.Decimal
+	Items      []OrderItem
+	CreatedAt  time.Time
 }
 
 type OrderItem struct {
-	ID        uuid.UUID       `json:"id"`
-	OrderID   uuid.UUID       `json:"order_id"`
-	ProductID uuid.UUID       `json:"product_id"`
-	Quantity  int             `json:"quantity"`
-	Price     decimal.Decimal `json:"price"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID        uuid.UUID
+	OrderID   uuid.UUID
+	ProductID uuid.UUID
+	Quantity  int
+	Price     decimal.Decimal
 }
 
 type OrderMessage struct {

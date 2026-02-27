@@ -17,28 +17,18 @@ import (
 var (
 	ErrEmptyCart         = errors.New("cart is empty")
 	ErrOrderNotFound     = errors.New("order not found")
-	ErrOrderAccessDenied = errors.New("access denied to this order")
+	ErrOrderAccessDenied = errors.New("access denied")
 )
 
 type OrderService struct {
 	orderRepo   repository.OrderRepository
 	cartRepo    repository.CartRepository
 	productRepo repository.ProductRepository
-	amqpChannel *amqp.Channel
+	amqpCh      *amqp.Channel
 }
 
-func NewOrderService(
-	orderRepo repository.OrderRepository,
-	cartRepo repository.CartRepository,
-	productRepo repository.ProductRepository,
-	amqpChannel *amqp.Channel,
-) *OrderService {
-	return &OrderService{
-		orderRepo:   orderRepo,
-		cartRepo:    cartRepo,
-		productRepo: productRepo,
-		amqpChannel: amqpChannel,
-	}
+func NewOrderService(orderRepo repository.OrderRepository, cartRepo repository.CartRepository, productRepo repository.ProductRepository, amqpCh *amqp.Channel) *OrderService {
+	return &OrderService{orderRepo: orderRepo, cartRepo: cartRepo, productRepo: productRepo, amqpCh: amqpCh}
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID) (*model.Order, error) {
@@ -46,7 +36,6 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID) (*mode
 	if err != nil {
 		return nil, fmt.Errorf("get cart: %w", err)
 	}
-
 	cartWithItems, err := s.cartRepo.GetCartWithItems(ctx, cart.ID)
 	if err != nil {
 		return nil, fmt.Errorf("get cart items: %w", err)
@@ -55,54 +44,35 @@ func (s *OrderService) CreateOrder(ctx context.Context, userID uuid.UUID) (*mode
 		return nil, ErrEmptyCart
 	}
 
-	// Calculate total and build order items
-	totalPrice := decimal.NewFromInt(0)
-	var orderItems []model.OrderItem
-	for _, item := range cartWithItems.Items {
-		product, err := s.productRepo.GetByID(ctx, item.ProductID)
-		if err != nil {
-			return nil, fmt.Errorf("get product: %w", err)
+	var total decimal.Decimal
+	var items []model.OrderItem
+	for _, ci := range cartWithItems.Items {
+		product, err := s.productRepo.GetByID(ctx, ci.ProductID)
+		if err != nil || product == nil {
+			return nil, fmt.Errorf("product %s not found", ci.ProductID)
 		}
-		if product == nil {
-			return nil, fmt.Errorf("product %s not found", item.ProductID)
-		}
-
-		totalPrice = totalPrice.Add(product.Price.Mul(decimal.NewFromInt(int64(item.Quantity))))
-		orderItems = append(orderItems, model.OrderItem{
-			ProductID: item.ProductID,
-			Quantity:  item.Quantity,
-			Price:     product.Price,
+		total = total.Add(product.Price.Mul(decimal.NewFromInt(int64(ci.Quantity))))
+		items = append(items, model.OrderItem{
+			ProductID: ci.ProductID, Quantity: ci.Quantity, Price: product.Price,
 		})
 	}
 
-	order := &model.Order{UserID: userID, Status: model.OrderStatusCreated, TotalPrice: totalPrice}
+	order := &model.Order{UserID: userID, Status: "pending", TotalPrice: total, Items: items}
 	if err := s.orderRepo.Create(ctx, order); err != nil {
 		return nil, fmt.Errorf("create order: %w", err)
 	}
 
-	for i := range orderItems {
-		orderItems[i].OrderID = order.ID
-	}
-	order.Items = orderItems
-
-	// Publish to RabbitMQ
-	msgBytes, err := json.Marshal(model.OrderMessage{OrderID: order.ID, UserID: userID})
-	if err != nil {
-		return nil, fmt.Errorf("marshal order message: %w", err)
-	}
-	err = s.amqpChannel.PublishWithContext(ctx, "", "orders", false, false, amqp.Publishing{
-		ContentType:  "application/json",
-		Body:         msgBytes,
-		DeliveryMode: amqp.Persistent,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("publish order message: %w", err)
+	// Publish to RabbitMQ for async processing
+	msg, _ := json.Marshal(model.OrderMessage{OrderID: order.ID, UserID: userID})
+	if s.amqpCh != nil {
+		_ = s.amqpCh.PublishWithContext(ctx, "", "orders", false, false, amqp.Publishing{
+			ContentType:  "application/json",
+			Body:         msg,
+			DeliveryMode: amqp.Persistent,
+		})
 	}
 
-	if err := s.cartRepo.ClearCart(ctx, cart.ID); err != nil {
-		return nil, fmt.Errorf("clear cart: %w", err)
-	}
-
+	_ = s.cartRepo.ClearCart(ctx, cart.ID)
 	return order, nil
 }
 
@@ -121,9 +91,5 @@ func (s *OrderService) GetByID(ctx context.Context, orderID, userID uuid.UUID) (
 }
 
 func (s *OrderService) ListByUserID(ctx context.Context, userID uuid.UUID) ([]model.Order, error) {
-	orders, err := s.orderRepo.ListByUserID(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("list orders: %w", err)
-	}
-	return orders, nil
+	return s.orderRepo.ListByUserID(ctx, userID)
 }

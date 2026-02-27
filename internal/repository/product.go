@@ -15,10 +15,9 @@ import (
 type ProductRepository interface {
 	Create(ctx context.Context, product *model.Product) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Product, error)
-	List(ctx context.Context, limit, offset int, search, sort, order string) ([]model.Product, int, error)
+	List(ctx context.Context, limit, offset int) ([]model.Product, int, error)
 	Update(ctx context.Context, product *model.Product) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	DecrementStock(ctx context.Context, tx pgx.Tx, productID uuid.UUID, quantity int) error
 }
 
 type pgProductRepo struct{ pool *pgxpool.Pool }
@@ -29,9 +28,9 @@ func NewProductRepository(pool *pgxpool.Pool) ProductRepository {
 
 func (r *pgProductRepo) Create(ctx context.Context, product *model.Product) error {
 	product.ID = uuid.New()
-	query := `INSERT INTO products (id, name, description, price, stock, created_at, updated_at)
-			  VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) RETURNING created_at, updated_at`
-	err := r.pool.QueryRow(ctx, query,
+	err := r.pool.QueryRow(ctx,
+		`INSERT INTO products (id, name, description, price, stock, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) RETURNING created_at, updated_at`,
 		product.ID, product.Name, product.Description, product.Price, product.Stock,
 	).Scan(&product.CreatedAt, &product.UpdatedAt)
 	if err != nil {
@@ -41,11 +40,10 @@ func (r *pgProductRepo) Create(ctx context.Context, product *model.Product) erro
 }
 
 func (r *pgProductRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Product, error) {
-	query := `SELECT id, name, description, price, stock, created_at, updated_at FROM products WHERE id = $1`
 	p := &model.Product{}
-	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&p.ID, &p.Name, &p.Description, &p.Price, &p.Stock, &p.CreatedAt, &p.UpdatedAt,
-	)
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, name, description, price, stock, created_at, updated_at FROM products WHERE id = $1`, id,
+	).Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.Stock, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -55,27 +53,16 @@ func (r *pgProductRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Produ
 	return p, nil
 }
 
-func (r *pgProductRepo) List(ctx context.Context, limit, offset int, search, sort, order string) ([]model.Product, int, error) {
-	allowedSorts := map[string]bool{"name": true, "price": true, "created_at": true}
-	if !allowedSorts[sort] {
-		sort = "created_at"
-	}
-	if order != "asc" && order != "desc" {
-		order = "desc"
-	}
-
+func (r *pgProductRepo) List(ctx context.Context, limit, offset int) ([]model.Product, int, error) {
 	var total int
-	countQ := `SELECT COUNT(*) FROM products WHERE ($1 = '' OR name ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%')`
-	if err := r.pool.QueryRow(ctx, countQ, search).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM products`).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count products: %w", err)
 	}
 
-	query := fmt.Sprintf(`SELECT id, name, description, price, stock, created_at, updated_at
-		FROM products
-		WHERE ($1 = '' OR name ILIKE '%%' || $1 || '%%' OR description ILIKE '%%' || $1 || '%%')
-		ORDER BY %s %s LIMIT $2 OFFSET $3`, sort, order)
-
-	rows, err := r.pool.Query(ctx, query, search, limit, offset)
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, name, description, price, stock, created_at, updated_at
+		 FROM products ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list products: %w", err)
 	}
@@ -93,15 +80,12 @@ func (r *pgProductRepo) List(ctx context.Context, limit, offset int, search, sor
 }
 
 func (r *pgProductRepo) Update(ctx context.Context, product *model.Product) error {
-	query := `UPDATE products SET name=$2, description=$3, price=$4, stock=$5, updated_at=NOW()
-			  WHERE id=$1 RETURNING updated_at`
-	err := r.pool.QueryRow(ctx, query,
+	err := r.pool.QueryRow(ctx,
+		`UPDATE products SET name=$2, description=$3, price=$4, stock=$5, updated_at=NOW()
+		 WHERE id=$1 RETURNING updated_at`,
 		product.ID, product.Name, product.Description, product.Price, product.Stock,
 	).Scan(&product.UpdatedAt)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
 		return fmt.Errorf("update product: %w", err)
 	}
 	return nil
@@ -113,21 +97,7 @@ func (r *pgProductRepo) Delete(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("delete product: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return pgx.ErrNoRows
-	}
-	return nil
-}
-
-func (r *pgProductRepo) DecrementStock(ctx context.Context, tx pgx.Tx, productID uuid.UUID, quantity int) error {
-	ct, err := tx.Exec(ctx,
-		`UPDATE products SET stock = stock - $2, updated_at = NOW() WHERE id = $1 AND stock >= $2`,
-		productID, quantity,
-	)
-	if err != nil {
-		return fmt.Errorf("decrement stock: %w", err)
-	}
-	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("insufficient stock for product %s", productID)
+		return fmt.Errorf("product not found")
 	}
 	return nil
 }

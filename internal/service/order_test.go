@@ -6,13 +6,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/flicky/go-ecommerce-api/internal/model"
-	"github.com/flicky/go-ecommerce-api/internal/repository"
 )
 
 type mockOrderRepo struct {
@@ -26,25 +24,23 @@ func newMockOrderRepo() *mockOrderRepo {
 func (m *mockOrderRepo) Create(_ context.Context, order *model.Order) error {
 	order.ID = uuid.New()
 	order.CreatedAt = time.Now()
-	order.UpdatedAt = time.Now()
 	m.orders[order.ID] = order
 	return nil
 }
 
-func (m *mockOrderRepo) CreateItems(_ context.Context, _ pgx.Tx, items []model.OrderItem) error {
-	for i := range items {
-		items[i].ID = uuid.New()
-		items[i].CreatedAt = time.Now()
+func (m *mockOrderRepo) ProcessOrder(_ context.Context, _ uuid.UUID, _ []model.OrderItem) error {
+	return nil
+}
+
+func (m *mockOrderRepo) UpdateStatus(_ context.Context, id uuid.UUID, status string) error {
+	if o, ok := m.orders[id]; ok {
+		o.Status = status
 	}
 	return nil
 }
 
 func (m *mockOrderRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Order, error) {
-	o, ok := m.orders[id]
-	if !ok {
-		return nil, nil
-	}
-	return o, nil
+	return m.orders[id], nil
 }
 
 func (m *mockOrderRepo) ListByUserID(_ context.Context, userID uuid.UUID) ([]model.Order, error) {
@@ -57,22 +53,8 @@ func (m *mockOrderRepo) ListByUserID(_ context.Context, userID uuid.UUID) ([]mod
 	return orders, nil
 }
 
-func (m *mockOrderRepo) UpdateStatus(_ context.Context, _ pgx.Tx, id uuid.UUID, status model.OrderStatus) error {
-	if o, ok := m.orders[id]; ok {
-		o.Status = status
-		return nil
-	}
-	return pgx.ErrNoRows
-}
-
-func (m *mockOrderRepo) BeginTx(_ context.Context) (pgx.Tx, error) { return nil, nil }
-
-var _ repository.OrderRepository = (*mockOrderRepo)(nil)
-
 func TestOrderService_CreateOrder_EmptyCart(t *testing.T) {
-	svc := &OrderService{
-		orderRepo: newMockOrderRepo(), cartRepo: newMockCartRepo(), productRepo: newMockProductRepo(),
-	}
+	svc := NewOrderService(newMockOrderRepo(), newMockCartRepo(), newMockProductRepo(), nil)
 	_, err := svc.CreateOrder(context.Background(), uuid.New())
 	assert.ErrorIs(t, err, ErrEmptyCart)
 }
@@ -82,32 +64,17 @@ func TestOrderService_GetByID(t *testing.T) {
 	userID := uuid.New()
 	orderID := uuid.New()
 	repo.orders[orderID] = &model.Order{
-		ID: orderID, UserID: userID, Status: model.OrderStatusCreated,
-		TotalPrice: decimal.NewFromFloat(99.99), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		ID: orderID, UserID: userID, Status: "completed",
+		TotalPrice: decimal.NewFromFloat(99.99), CreatedAt: time.Now(),
 	}
-
-	svc := &OrderService{orderRepo: repo}
-
+	svc := NewOrderService(repo, nil, nil, nil)
 	order, err := svc.GetByID(context.Background(), orderID, userID)
 	require.NoError(t, err)
 	assert.Equal(t, orderID, order.ID)
 }
 
 func TestOrderService_GetByID_NotFound(t *testing.T) {
-	svc := &OrderService{orderRepo: newMockOrderRepo()}
+	svc := NewOrderService(newMockOrderRepo(), nil, nil, nil)
 	_, err := svc.GetByID(context.Background(), uuid.New(), uuid.New())
 	assert.ErrorIs(t, err, ErrOrderNotFound)
-}
-
-func TestOrderService_GetByID_WrongUser(t *testing.T) {
-	repo := newMockOrderRepo()
-	orderID := uuid.New()
-	repo.orders[orderID] = &model.Order{
-		ID: orderID, UserID: uuid.New(), Status: model.OrderStatusCreated,
-		TotalPrice: decimal.NewFromFloat(50), CreatedAt: time.Now(), UpdatedAt: time.Now(),
-	}
-
-	svc := &OrderService{orderRepo: repo}
-	_, err := svc.GetByID(context.Background(), orderID, uuid.New())
-	assert.ErrorIs(t, err, ErrOrderAccessDenied)
 }

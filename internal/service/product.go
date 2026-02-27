@@ -17,25 +17,21 @@ import (
 
 var ErrProductNotFound = errors.New("product not found")
 
-const productCacheTTL = 60 * time.Second
-
 type ProductService struct {
-	productRepo repository.ProductRepository
-	redisClient *redis.Client
+	repo  repository.ProductRepository
+	cache *redis.Client
 }
 
-func NewProductService(productRepo repository.ProductRepository, redisClient *redis.Client) *ProductService {
-	return &ProductService{productRepo: productRepo, redisClient: redisClient}
+func NewProductService(repo repository.ProductRepository, cache *redis.Client) *ProductService {
+	return &ProductService{repo: repo, cache: cache}
 }
 
 func (s *ProductService) Create(ctx context.Context, req dto.CreateProductRequest) (*dto.ProductResponse, error) {
 	product := &model.Product{
-		Name:        req.Name,
-		Description: req.Description,
-		Price:       req.Price,
-		Stock:       req.Stock,
+		Name: req.Name, Description: req.Description,
+		Price: req.Price, Stock: req.Stock,
 	}
-	if err := s.productRepo.Create(ctx, product); err != nil {
+	if err := s.repo.Create(ctx, product); err != nil {
 		return nil, fmt.Errorf("create product: %w", err)
 	}
 	resp := toProductResponse(product)
@@ -44,54 +40,47 @@ func (s *ProductService) Create(ctx context.Context, req dto.CreateProductReques
 
 func (s *ProductService) GetByID(ctx context.Context, id uuid.UUID) (*dto.ProductResponse, error) {
 	cacheKey := "product:" + id.String()
-
-	// Try cache
-	if s.redisClient != nil {
-		if cached, err := s.redisClient.Get(ctx, cacheKey).Result(); err == nil {
+	if s.cache != nil {
+		if data, err := s.cache.Get(ctx, cacheKey).Result(); err == nil {
 			var resp dto.ProductResponse
-			if json.Unmarshal([]byte(cached), &resp) == nil {
+			if json.Unmarshal([]byte(data), &resp) == nil {
 				return &resp, nil
 			}
 		}
 	}
 
-	product, err := s.productRepo.GetByID(ctx, id)
+	product, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get product: %w", err)
 	}
 	if product == nil {
 		return nil, ErrProductNotFound
 	}
-
 	resp := toProductResponse(product)
 
-	// Write to cache
-	if s.redisClient != nil {
+	if s.cache != nil {
 		if data, err := json.Marshal(resp); err == nil {
-			s.redisClient.Set(ctx, cacheKey, data, productCacheTTL)
+			s.cache.Set(ctx, cacheKey, data, time.Minute)
 		}
 	}
-
 	return &resp, nil
 }
 
-func (s *ProductService) List(ctx context.Context, req dto.ListProductsRequest) (*dto.ProductListResponse, error) {
-	offset := (req.Page - 1) * req.Limit
-	products, total, err := s.productRepo.List(ctx, req.Limit, offset, req.Search, req.Sort, req.Order)
+func (s *ProductService) List(ctx context.Context, page, limit int) (*dto.ProductListResponse, error) {
+	offset := (page - 1) * limit
+	products, total, err := s.repo.List(ctx, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list products: %w", err)
 	}
-
-	var items []dto.ProductResponse
-	for _, p := range products {
-		items = append(items, toProductResponse(&p))
+	items := make([]dto.ProductResponse, len(products))
+	for i, p := range products {
+		items[i] = toProductResponse(&p)
 	}
-
-	return &dto.ProductListResponse{Products: items, Total: total, Page: req.Page, Limit: req.Limit}, nil
+	return &dto.ProductListResponse{Products: items, Total: total}, nil
 }
 
 func (s *ProductService) Update(ctx context.Context, id uuid.UUID, req dto.UpdateProductRequest) (*dto.ProductResponse, error) {
-	product, err := s.productRepo.GetByID(ctx, id)
+	product, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get product: %w", err)
 	}
@@ -99,50 +88,31 @@ func (s *ProductService) Update(ctx context.Context, id uuid.UUID, req dto.Updat
 		return nil, ErrProductNotFound
 	}
 
-	if req.Name != nil {
-		product.Name = *req.Name
-	}
-	if req.Description != nil {
-		product.Description = *req.Description
-	}
-	if req.Price != nil {
-		product.Price = *req.Price
-	}
-	if req.Stock != nil {
-		product.Stock = *req.Stock
-	}
+	product.Name = req.Name
+	product.Description = req.Description
+	product.Price = req.Price
+	product.Stock = req.Stock
 
-	if err := s.productRepo.Update(ctx, product); err != nil {
+	if err := s.repo.Update(ctx, product); err != nil {
 		return nil, fmt.Errorf("update product: %w", err)
 	}
-
-	s.invalidateCache(ctx, id)
 	resp := toProductResponse(product)
 	return &resp, nil
 }
 
 func (s *ProductService) Delete(ctx context.Context, id uuid.UUID) error {
-	if err := s.productRepo.Delete(ctx, id); err != nil {
-		return fmt.Errorf("delete product: %w", err)
+	if err := s.repo.Delete(ctx, id); err != nil {
+		return err
 	}
-	s.invalidateCache(ctx, id)
+	if s.cache != nil {
+		s.cache.Del(ctx, "product:"+id.String())
+	}
 	return nil
-}
-
-func (s *ProductService) invalidateCache(ctx context.Context, id uuid.UUID) {
-	if s.redisClient != nil {
-		s.redisClient.Del(ctx, "product:"+id.String())
-	}
 }
 
 func toProductResponse(p *model.Product) dto.ProductResponse {
 	return dto.ProductResponse{
-		ID:          p.ID,
-		Name:        p.Name,
-		Description: p.Description,
-		Price:       p.Price,
-		Stock:       p.Stock,
-		CreatedAt:   p.CreatedAt,
-		UpdatedAt:   p.UpdatedAt,
+		ID: p.ID, Name: p.Name, Description: p.Description,
+		Price: p.Price, Stock: p.Stock, CreatedAt: p.CreatedAt,
 	}
 }
